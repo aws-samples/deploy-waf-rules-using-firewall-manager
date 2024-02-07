@@ -1,0 +1,5 @@
+FMS_CF_POLICY_STACK_SET_NAME=cf-fms-security-policy-stack-set
+FMS_REGIONAL_POLICY_STACK_SET_NAME=regional-fms-security-policy-stack-set
+FMS_DELEGATED_ADMIN_ACCOUNT_ID=<add-firewall-manager-delegated-admin-account-number>
+OVERIDEACTION=COUNT
+ENVIRONMENT=tst

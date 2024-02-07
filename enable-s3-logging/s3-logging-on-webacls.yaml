@@ -1,0 +1,147 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Attaches an existing S3 Bucket onto a WAF Web ACL for logging
+
+
+Resources:
+
+  MyEventRule:
+    Type: "AWS::Events::Rule"
+    Properties:
+      Description: "Rule to trigger lambda"
+      Name: "MyEventRule"
+      EventPattern: '
+                {
+                  "detail-type": ["AWS API Call via CloudTrail"],
+                  "detail": {
+                    "eventSource": ["wafv2.amazonaws.com"],
+                    "eventName": ["CreateWebACL"],
+                    "userAgent": ["fms.amazonaws.com"]
+                  }
+                }'
+      State: "ENABLED"
+      Targets:
+        - Arn: !GetAtt LambdaFunction.Arn
+          Id: "LambdaFunction"
+
+  PermissionForEventsToInvokeLambda: 
+    Type: AWS::Lambda::Permission
+    Properties: 
+      FunctionName: 
+        Ref: "LambdaFunction"
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: !GetAtt MyEventRule.Arn
+
+  LambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        ZipFile: |
+          import boto3
+          import logging
+          import re
+          import time
+          import json
+          import os
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+          wafv2 = boto3.client("wafv2")
+
+
+          def attachLoggingForWebACL(web_acl_type, log_destination_config):
+              """Attach the logging configuration to all the webACLs created by FMS."""
+              try:
+                  time.sleep(45)
+                  web_acls_list = wafv2.list_web_acls(Scope=web_acl_type)
+                  logger.info(web_acls_list["WebACLs"])
+                  search_term = "FMManagedWebACLV2-"
+                  logger.info("WebACL to search for: " + search_term)
+                  for web_acl in web_acls_list["WebACLs"]:
+                      if re.search(search_term, web_acl["Name"]):
+                          updateLoggingConfiguration(web_acl["ARN"], log_destination_config)
+              except Exception as e:
+                  logger.exception(str(e))
+
+
+          def updateLoggingConfiguration(ResourceArn, LogDestinationConfigs):
+              """Update the logging configuration to all the webACLs created by FMS."""
+              try:
+                  wafv2.put_logging_configuration(
+                      LoggingConfiguration={
+                          "ResourceArn": ResourceArn,
+                          "LogDestinationConfigs": [LogDestinationConfigs],
+                      }
+                  )
+                  logger.info("Success - logging configuration attached to S3 Bucket: " + LogDestinationConfigs)
+              except Exception as e:
+                  logger.exception(str(e))
+
+
+          def lambda_handler(event, context):
+              """Lambda Handler."""
+              print(json.dumps(event))
+              S3_LOGGING_BUCKET_ARN = os.environ['S3_LOGGING_BUCKET_ARN']
+              REGION = event['region']
+              print("The Logging bucket is:" + S3_LOGGING_BUCKET_ARN)
+              try:
+                  if REGION == "us-east-1":
+                      attachLoggingForWebACL("CLOUDFRONT", S3_LOGGING_BUCKET_ARN)
+                  attachLoggingForWebACL("REGIONAL", S3_LOGGING_BUCKET_ARN)
+              except Exception as e:
+                  print("Error" + e)
+      Handler: index.lambda_handler
+      Runtime: python3.9
+      Timeout: 120
+      MemorySize: 512
+      Environment:
+        Variables:
+          S3_LOGGING_BUCKET_ARN: !Sub 'arn:aws:s3:::aws-waf-logs-${AWS::AccountId}'
+      Role: !GetAtt LambdaExecutionRole.Arn
+
+  LambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: lambda-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - 'logs:CreateLogGroup'
+                  - 'logs:PutLogEvents'
+                Resource: !Sub 'arn:aws:logs:*:${AWS::AccountId}:*'
+              - Effect: Allow
+                Action: 
+                  - 'logs:CreateLogDelivery'
+                  - 'logs:DeleteLogDelivery'
+                Resource:
+                  - !Sub 'arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/lambda/*'
+                  - !Sub 'arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/lambda/*:log-stream:*'
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogDelivery'
+                  - 'logs:DeleteLogDelivery'
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - 's3:PutBucketPolicy'
+                  - 's3:GetBucketPolicy' 
+                Resource: !Sub "arn:aws:s3:::aws-waf-logs-${AWS::AccountId}"
+              - Effect: Allow
+                Action:
+                  - 'wafv2:ListWebACLs'
+                  - 'wafv2:PutLoggingConfiguration'
+                  - 'wafv2:DeleteLoggingConfiguration'          
+                Resource: !Sub 'arn:aws:wafv2:*:${AWS::AccountId}:*/webacl/*/*'

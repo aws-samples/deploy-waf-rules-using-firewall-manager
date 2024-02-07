@@ -1,0 +1,228 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Firewall policy deployment
+
+Parameters:
+  pEnvironment:
+    Description: 'Environment'
+    Type: String
+    AllowedValues:
+      - prd
+      - tst
+      - dev
+
+  pBlacklistIPSetName:
+    Description: Blacklist IP Set Name
+    Type: String
+    Default: regional-blacklist-ip-set
+  
+  pCustomRuleGroupName:
+    Description: Mandatory Rule Group
+    Type: String
+    Default: fms-regional-mandatory-rule-group
+
+  pEnableSampleRequest:
+    Description: Sampled Request enabled?
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  pEnableCloudWatchMetrics:
+    Description: CloudWatch metrics enabled?
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  pEnableRemediation:
+    Description: Enable FMS Policy remediation?
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+  
+  pOverrideAction:
+    Description: Override rules in the rule groups
+    Type: String
+    Default: "COUNT"
+
+  pEnableResourceCleanUp:
+    Description: Indicates whether FMS should automatically remove protections from resources that leave the policy scope and clean up resources that Firewall Manager is managing for accounts when those accounts leave policy scope.
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  pIncludeSpecificAccounts:
+    Description: A comma separated list of specific accounts that need to be included to deploy FMS policy
+    Type: String
+    Default: ""
+
+  pIncludeSpecificOrgUnits:
+    Description: A comma separated list of specific org units that need to be included to deploy FMS policy
+    Type: String
+    Default: ""
+
+  pRateLimit:
+   Description: Rate limit that you want to keep
+   Type: Number
+   Default: 1000
+
+Conditions:
+  IncludeAllAccountsInMainOrg: !And [!Equals [!Ref pIncludeSpecificAccounts, ""], !Equals [!Ref pIncludeSpecificOrgUnits, ""]]
+
+Resources:
+  IPSetBlacklist: 
+    Type: AWS::WAFv2::IPSet
+    Properties: 
+        Name: !Ref pBlacklistIPSetName
+        Scope: REGIONAL
+        IPAddressVersion: IPV4
+        Addresses: []
+
+  # Custom rule group
+  FMSRegCustomRuleGroup:
+    Type: AWS::WAFv2::RuleGroup
+    Properties:
+        Name: !Ref pCustomRuleGroupName
+        Scope: REGIONAL
+        VisibilityConfig:
+            SampledRequestsEnabled: !Ref pEnableSampleRequest
+            CloudWatchMetricsEnabled: !Ref pEnableCloudWatchMetrics
+            MetricName: !Sub ${pCustomRuleGroupName}-metric     
+        Capacity: 45
+        Rules:
+        - Name: prevent-xss-rule
+          Priority: 0
+          Action:
+            Block: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: !Ref pEnableSampleRequest
+            CloudWatchMetricsEnabled: !Ref pEnableCloudWatchMetrics
+            MetricName: prevent-xss-rule-metric
+          Statement:
+              XssMatchStatement:
+                FieldToMatch:
+                  QueryString: {}
+                TextTransformations:
+                  - Priority: 0
+                    Type: NONE          
+        - Name: ipblock-rule
+          Priority: 1
+          Action:
+            Block: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: !Ref pEnableSampleRequest
+            CloudWatchMetricsEnabled: !Ref pEnableCloudWatchMetrics
+            MetricName: ipblock-rule-metric
+          Statement:
+              IPSetReferenceStatement:
+                Arn: !GetAtt IPSetBlacklist.Arn
+        - Name: rate-based-rule
+          Priority: 2
+          Action:
+            Block: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: !Ref pEnableSampleRequest
+            CloudWatchMetricsEnabled: !Ref pEnableCloudWatchMetrics
+            MetricName: rate-based-rule-metric
+          Statement:
+              RateBasedStatement:
+                Limit: !Ref pRateLimit
+                AggregateKeyType: IP
+
+  WAFPolicy:
+    Type: AWS::FMS::Policy
+    DependsOn:
+      - FMSRegCustomRuleGroup
+    Properties:
+      ExcludeResourceTags: false
+      DeleteAllPolicyResources: true
+      PolicyName: waf-regional-policy
+      RemediationEnabled: !Ref pEnableRemediation
+      ResourceType: ResourceTypeList
+      ResourcesCleanUp: !Ref pEnableResourceCleanUp
+      IncludeMap:
+        !If
+          - IncludeAllAccountsInMainOrg
+          - !Ref "AWS::NoValue"
+          - 
+            ACCOUNT: !Split [",", !Ref pIncludeSpecificAccounts]
+            ORGUNIT: !Split [",", !Ref pIncludeSpecificOrgUnits]
+      ResourceTypeList:
+        - AWS::ElasticLoadBalancingV2::LoadBalancer
+        - AWS::ApiGateway::Stage
+      SecurityServicePolicyData:
+        Type: WAFV2
+        ManagedServiceData: !Sub '{"type":"WAFV2", 
+                                  "preProcessRuleGroups":
+                                  [
+                                    {
+                                      "ruleGroupArn":null,
+                                      "overrideAction":{"type":"${pOverrideAction}"},
+                                      "managedRuleGroupIdentifier":{"version":null,"vendorName":"AWS","managedRuleGroupName":"AWSManagedRulesCommonRuleSet"},
+                                      "ruleGroupType":"ManagedRuleGroup",
+                                      "excludeRules":[]
+                                    },
+                                    {
+                                      "ruleGroupArn":null,
+                                      "overrideAction":{"type":"${pOverrideAction}"},
+                                      "managedRuleGroupIdentifier":{"version":null,"vendorName":"AWS","managedRuleGroupName":"AWSManagedRulesLinuxRuleSet"},
+                                      "ruleGroupType":"ManagedRuleGroup",
+                                      "excludeRules":[]
+                                    },
+                                    {
+                                      "ruleGroupArn":null,
+                                      "overrideAction":{"type":"${pOverrideAction}"},
+                                      "managedRuleGroupIdentifier":{"version":null,"vendorName":"AWS","managedRuleGroupName":"AWSManagedRulesSQLiRuleSet"},
+                                      "ruleGroupType":"ManagedRuleGroup",
+                                      "excludeRules":[]
+                                    },
+                                    {
+                                      "ruleGroupArn":null,
+                                      "overrideAction":{"type":"${pOverrideAction}"},
+                                      "managedRuleGroupIdentifier":{"version":null,"vendorName":"AWS","managedRuleGroupName":"AWSManagedRulesKnownBadInputsRuleSet"},
+                                      "ruleGroupType":"ManagedRuleGroup",
+                                      "excludeRules":[]
+                                    },
+                                    {
+                                      "ruleGroupArn":null,
+                                      "overrideAction":{"type":"${pOverrideAction}"},
+                                      "managedRuleGroupIdentifier":{"version":null,"vendorName":"AWS","managedRuleGroupName":"AWSManagedRulesAnonymousIpList"},
+                                      "ruleGroupType":"ManagedRuleGroup",
+                                      "excludeRules":[]
+                                    },
+                                    {
+                                      "ruleGroupArn":null,
+                                      "overrideAction":{"type":"${pOverrideAction}"},
+                                      "managedRuleGroupIdentifier":{"version":null,"vendorName":"AWS","managedRuleGroupName":"AWSManagedRulesAmazonIpReputationList"},
+                                      "ruleGroupType":"ManagedRuleGroup",
+                                      "excludeRules":[]
+                                    },                                                          
+                                    {
+                                      "ruleGroupType":"RuleGroup",
+                                      "ruleGroupArn":"${FMSRegCustomRuleGroup.Arn}",
+                                      "overrideAction":{"type":"${pOverrideAction}"}
+                                    }
+                                  ],
+                                  "defaultAction":{"type":"ALLOW"}}'
+      Tags:
+        - Key: Environment
+          Value: !Ref pEnvironment
+
+Outputs:
+  FMSPolicy:
+    Description: "FMS regional policy"
+    Value: !GetAtt  WAFPolicy.Arn
+
+  RegIPSetBlackList:
+    Description: "IP Black List set, add IPs you want to blacklist in regional resources"
+    Value: !GetAtt IPSetBlacklist.Arn
+
+  WAFCustomRuleGroup:
+    Description: "Rule groups that contain custom rules"
+    Value: !GetAtt FMSRegCustomRuleGroup.Arn

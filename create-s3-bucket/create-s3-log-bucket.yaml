@@ -1,0 +1,107 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: 'S3 bucket deployment for logs'
+
+Parameters:
+
+  pVersioning:
+    Description: 'Is versioning required'
+    Type: String
+    AllowedValues:
+      - Enabled
+      - Suspended
+    Default: Enabled
+
+  pEnvironment:
+    Description: 'prd/tst/dev'
+    Type: String
+    Default: tst
+    AllowedValues:
+      - prd
+      - tst
+      - dev
+
+Resources:
+
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+         Status: !Ref pVersioning
+      BucketName: !Sub aws-waf-logs-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: 'AES256'
+      LifecycleConfiguration:
+        Rules:
+          - Id: S3LifeCycleRule
+            Status: Enabled
+            ExpirationInDays : 2555  #expire after 7 years
+            Transitions:
+              - TransitionInDays: '90'
+                StorageClass: STANDARD_IA
+              - TransitionInDays: '180'
+                StorageClass: GLACIER
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+
+      Tags:
+        - Key: Environment
+          Value: !Ref pEnvironment
+        - Key: Placement
+          Value: !Ref AWS::Region
+
+  S3BucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket:
+        Ref: S3Bucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Sid: DenyInsecureConnections
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !Sub arn:aws:s3:::${S3Bucket}/*
+            Condition:
+              Bool:
+                'aws:SecureTransport': false
+          - Sid: AWSLogDeliveryWrite
+            Effect: Allow
+            Principal:
+              Service: delivery.logs.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub arn:aws:s3:::aws-waf-logs-${AWS::AccountId}/AWSLogs/${AWS::AccountId}/*
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Sub ${AWS::AccountId}
+                s3:x-amz-acl: bucket-owner-full-control
+          - Sid: AWSLogDeliveryAclCheck
+            Effect: Allow
+            Principal:
+              Service: delivery.logs.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !Sub arn:aws:s3:::aws-waf-logs-${AWS::AccountId}
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Sub ${AWS::AccountId}
+              ArnLike:
+                aws:SourceArn: !Sub arn:aws:logs:*:${AWS::AccountId}:*
+
+
+# ----------------------------------------------------------------------------
+# Outputs
+# ----------------------------------------------------------------------------
+
+Outputs:
+  S3LogBucketArn:
+    Description: "S3 Bucket Logging bucket Arn"
+    Value: !GetAtt  S3Bucket.Arn
