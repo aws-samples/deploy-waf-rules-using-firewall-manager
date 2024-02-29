@@ -1,13 +1,3 @@
-<<<<<<< HEAD
-## My Project
-
-TODO: Fill this README out!
-
-Be sure to:
-
-* Change the title in this README
-* Edit your repository description on GitHub
-
 ## Security
 
 See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
@@ -18,7 +8,7 @@ This library is licensed under the MIT-0 License. See the LICENSE file.
 
 ## Description
 
-# Use AWS Firewal Manager(FMS) to centrally configure and manage Web Application Firewall(WAF) rules across AWS accounts
+### Use AWS Firewal Manager(FMS) to centrally configure and manage Web Application Firewall(WAF) rules across AWS accounts
 AWS [Firewall Manager](https://docs.aws.amazon.com/waf/latest/developerguide/fms-chapter.html) is a security management service that allows you to centrally configure and manage firewall rules across your accounts and applications in AWS Organizations. In this sample we use FMS to centrally manage few AWS managed [WAF](https://docs.aws.amazon.com/waf/latest/developerguide/aws-managed-rule-groups.html) rules in all your accounts. These WAF rules are:
 1. AWS Core rule set
 1. AWS Linux operating system
